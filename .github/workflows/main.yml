@@ -72,20 +72,6 @@ jobs:
             sleep 2
           done
 
-      - name: Take screenshot of specific window
-        if: always()
-        run: |
-          cd "$WORK_DIR"
-          
-          # Try to capture RustDesk window specifically
-          echo "Looking for RustDesk window..."
-          
-          # Get window information (might need to adjust based on actual window title)
-          windowInfo=$(osascript -e 'tell application "System Events" to get name of every window of every process')
-          echo "Available windows: $windowInfo"
-          
-          # Take a regular screenshot as fallback
-          screencapture -x "$WORK_DIR/window_screenshot.png"
 
       - name: Use alternative screenshot methods
         if: always()
