@@ -1,394 +1,152 @@
-name: RustDesk with VNC & Tailscale Remote Access
+name: SSHX Remote Access with Screenshots
 
 on:
   workflow_dispatch:
 
 jobs:
-  setup-remote-access:
+  setup-sshx:
     runs-on: macos-latest
-    timeout-minutes: 360
+    timeout-minutes: 25  # 5 minutes setup + 20 minutes keepalive
 
     steps:
-      - name: Setup VNC with ARD
+      - name: Create screenshot directory
         run: |
-          echo "=== Setting up Apple Remote Desktop/VNC ==="
+          mkdir -p screenshots
+          echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
+          echo "SSHX_SESSION_FILE=$(pwd)/sshx_session.txt" >> $GITHUB_ENV
+
+      - name: Take initial screenshot
+        run: |
+          echo "=== Taking initial screenshot ==="
+          screenshot_file="$SCREENSHOT_DIR/initial_$(date +%s).png"
+          sudo screencapture -x "$screenshot_file" 2>/dev/null || true
           
-          # First, enable Screen Recording via System Settings
-          echo "Enabling Screen Sharing via System Settings..."
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
-          
-          # Activate and configure ARD agent with full privileges
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -restart -agent -privs -all
-          
-          # Enable legacy VNC
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvnclegacy -vnclegacy yes
-          
-          # Set VNC password
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvncpw myvncpassword
-          
-          # Allow access for all users
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -allowAccessFor -allUsers
-          
-          # Restart to apply changes
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -restart -agent
-          
-          sleep 3
-          
-          # Verify VNC is running
-          echo ""
-          echo "✅ VNC/ARD setup complete"
-          echo "VNC Password: myvncpassword"
-          echo "Checking VNC status..."
-          
-          if sudo lsof -i :5900 &>/dev/null; then
-            echo "✅ VNC is listening on port 5900"
+          if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+            size=$(ls -lh "$screenshot_file" | awk '{print $5}')
+            echo "✅ Initial screenshot saved: ${size}"
           else
-            echo "⚠️ VNC may not be listening. Checking alternative ports..."
-            sudo lsof -i :5900-5910 2>/dev/null || echo "No VNC ports found"
+            echo "⚠️ Could not take initial screenshot"
           fi
 
-      - name: Install Tailscale (simplified)
+      - name: Install and run sshx
         run: |
-          echo "=== Installing Tailscale ==="
+          echo "=== Installing and running sshx ==="
           
-          # Clean up any previous installation
-          echo "Cleaning up previous Tailscale..."
-          sudo rm -rf /Applications/Tailscale.app 2>/dev/null || true
+          # Install sshx
+          echo "Installing sshx..."
+          curl -sSf https://sshx.io/get | sh
           
-          # Install Tailscale directly via curl to .pkg
-          echo "Downloading Tailscale..."
-          TAILSCALE_PKG="/tmp/tailscale.pkg"
+          # Run sshx in background and capture session info
+          echo "Starting sshx session..."
+          (sshx --background 2>&1 | tee "$SSHX_SESSION_FILE") &
+          SSHX_PID=$!
+          echo "SSHX_PID=$SSHX_PID" >> $GITHUB_ENV
           
-          # Try to get latest Tailscale version
-          if curl -fsSL -o "$TAILSCALE_PKG" "https://pkgs.tailscale.com/stable/tailscale-latest.pkg"; then
-            echo "Installing Tailscale from .pkg..."
-            sudo installer -pkg "$TAILSCALE_PKG" -target /
-            rm -f "$TAILSCALE_PKG"
-          else
-            echo "Failed to download .pkg, trying alternative method..."
-            # Alternative: Use brew install tailscale only
-            if ! command -v brew &>/dev/null; then
-              echo "Installing Homebrew..."
-              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-              echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-              eval "$(/opt/homebrew/bin/brew shellenv)"
-            fi
-            
-            echo "Installing Tailscale via Homebrew..."
-            brew install tailscale
-          fi
-          
-          echo "✅ Tailscale installation complete"
-
-      - name: Start Tailscale services
-        run: |
-          echo "=== Starting Tailscale ==="
-          
-          # Start tailscaled service
-          echo "Starting tailscaled service..."
-          
-          # Try multiple methods to start the service
-          if [ -f "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then
-            echo "Starting via Tailscale app..."
-            sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale --cleanup 2>/dev/null || true
-          fi
-          
-          # Start tailscaled using system method
-          echo "Starting tailscaled daemon..."
-          sudo tailscaled 2>/dev/null &
-          sleep 3
-          
-          # Check if tailscaled is running
-          if pgrep -x tailscaled &>/dev/null; then
-            echo "✅ tailscaled is running"
-          else
-            echo "⚠️ tailscaled may not be running, trying alternative..."
-            # Try launchctl
-            sudo launchctl load /Library/LaunchDaemons/com.tailscale.tailscaled.plist 2>/dev/null || true
-            sleep 2
-          fi
-          
-          echo "Waiting for services to stabilize..."
-          sleep 5
-
-      - name: Authenticate Tailscale
-        run: |
-          echo "=== Authenticating Tailscale ==="
-          
-          # Auth key
-          AUTH_KEY="tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf"
-          
-          echo "Authenticating Tailscale..."
-          
-          # Multiple attempts with delays
-          for attempt in {1..3}; do
-            echo "Attempt $attempt of 3..."
-            
-            if sudo tailscale up --authkey "$AUTH_KEY" --accept-routes 2>&1; then
-              echo "✅ Tailscale authentication successful"
-              break
-            else
-              echo "Attempt $attempt failed"
-              if [ $attempt -lt 3 ]; then
-                echo "Waiting 10 seconds before retry..."
-                sleep 10
-              fi
-            fi
-          done
-          
-          # Wait for connection
-          echo "Waiting for Tailscale to establish connection..."
-          sleep 15
-
-      - name: Get connection info
-        run: |
-          echo "=== Connection Information ==="
-          
-          # Create info directory
-          INFO_DIR="$HOME/connection_info"
-          mkdir -p "$INFO_DIR"
-          
-          # Get Tailscale status
-          echo "Getting Tailscale status..."
-          tailscale status 2>/dev/null | tee "$INFO_DIR/tailscale_status.txt" || echo "Tailscale status unavailable"
-          
-          # Get Tailscale IP
-          echo ""
-          echo "Tailscale IPs:"
-          tailscale ip --4 2>/dev/null | tee "$INFO_DIR/tailscale_ip.txt" || echo "No Tailscale IP"
-          
-          # Get local IP
-          echo ""
-          echo "Local Network IP:"
-          ipconfig getifaddr en0 2>/dev/null | tee "$INFO_DIR/local_ip.txt" || echo "No local IP"
-          
-          # Check VNC
-          echo ""
-          echo "VNC Status:"
-          VNC_PORT=$(sudo lsof -i :5900 2>/dev/null | head -2 | tail -1 || echo "")
-          if [ -n "$VNC_PORT" ]; then
-            echo "✅ VNC running on port 5900" | tee "$INFO_DIR/vnc_status.txt"
-            echo "VNC Password: myvncpassword" >> "$INFO_DIR/vnc_status.txt"
-          else
-            echo "⚠️ VNC not detected on port 5900" | tee "$INFO_DIR/vnc_status.txt"
-            echo "Checking other ports..." >> "$INFO_DIR/vnc_status.txt"
-            sudo lsof -i :5900-5910 2>/dev/null >> "$INFO_DIR/vnc_status.txt" || true
-          fi
-          
-          # Create summary file
-          SUMMARY="$INFO_DIR/summary.txt"
-          echo "=== REMOTE ACCESS INFORMATION ===" > "$SUMMARY"
-          echo "Generated: $(date)" >> "$SUMMARY"
-          echo "" >> "$SUMMARY"
-          
-          echo "VNC ACCESS:" >> "$SUMMARY"
-          echo "  Port: 5900" >> "$SUMMARY"
-          echo "  Password: myvncpassword" >> "$SUMMARY"
-          echo "" >> "$SUMMARY"
-          
-          echo "TAILSCALE VPN:" >> "$SUMMARY"
-          tailscale ip --4 2>/dev/null | while read ip; do
-            echo "  IP: $ip" >> "$SUMMARY"
-          done
-          echo "" >> "$SUMMARY"
-          
-          echo "LOCAL IP:" >> "$SUMMARY"
-          ipconfig getifaddr en0 2>/dev/null | while read ip; do
-            echo "  IP: $ip" >> "$SUMMARY"
-          done
-          echo "" >> "$SUMMARY"
-          
-          echo "To connect via VNC:" >> "$SUMMARY"
-          echo "  vnc://$(tailscale ip --4 2>/dev/null | head -1 || echo '<tailscale-ip>'):5900" >> "$SUMMARY"
-          echo "" >> "$SUMMARY"
-          
-          echo "Connection info saved to: $INFO_DIR"
-          echo "INFO_DIR=$INFO_DIR" >> $GITHUB_ENV
-
-      - name: Install and start RustDesk
-        run: |
-          echo "=== Installing RustDesk ==="
-          
-          # Create RustDesk directory
-          RUSTDESK_DIR="$HOME/rustdesk_info"
-          mkdir -p "$RUSTDESK_DIR"
-          
-          # Download and install
-          echo "Downloading RustDesk..."
-          curl -L -o /tmp/rustdesk.dmg "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
-          
-          echo "Installing RustDesk..."
-          hdiutil attach /tmp/rustdesk.dmg -mountpoint /Volumes/RustDesk -nobrowse
-          sudo cp -R "/Volumes/RustDesk/RustDesk.app" /Applications/
-          hdiutil detach /Volumes/RustDesk
-          rm -f /tmp/rustdesk.dmg
-          
-          echo "Starting RustDesk..."
-          open -a /Applications/RustDesk.app
+          # Wait for sshx to initialize
           sleep 10
           
-          # Get RustDesk ID if possible
-          echo "Getting RustDesk ID..."
-          # RustDesk stores its ID in ~/.config/rustdesk/RustDesk.toml
-          if [ -f "$HOME/.config/rustdesk/RustDesk.toml" ]; then
-            grep -i "id" "$HOME/.config/rustdesk/RustDesk.toml" | head -2 > "$RUSTDESK_DIR/rustdesk_id.txt" || true
+          # Get session URL if available
+          echo ""
+          echo "=== SSHX Session Info ==="
+          if [ -f "$SSHX_SESSION_FILE" ]; then
+            grep -i "connect\|join\|session\|http" "$SSHX_SESSION_FILE" | head -5
           fi
           
-          echo "RUSTDESK_DIR=$RUSTDESK_DIR" >> $GITHUB_ENV
-          echo "✅ RustDesk installed and started"
+          # Take screenshot after sshx starts
+          echo ""
+          echo "Taking post-startup screenshot..."
+          screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
+          sudo screencapture -x "$screenshot_file" 2>/dev/null || true
+          echo "✅ Setup complete"
 
-      - name: Take verification screenshot
-        run: |
-          echo "=== Taking verification screenshot ==="
-          
-          SCREENSHOT_DIR="$HOME/screenshots"
-          mkdir -p "$SCREENSHOT_DIR"
-          
-          # Take multiple screenshots
-          for i in {1..3}; do
-            echo "Taking screenshot $i..."
-            FILE="$SCREENSHOT_DIR/verify_$i.png"
-            screencapture -x "$FILE" 2>/dev/null || true
-            
-            if [ -f "$FILE" ] && [ -s "$FILE" ]; then
-              size=$(ls -lh "$FILE" | awk '{print $5}')
-              echo "  Screenshot $i: ${size}"
-            else
-              echo "  Screenshot $i: Failed"
-            fi
-            sleep 1
-          done
-          
-          echo "SCREENSHOT_DIR=$SCREENSHOT_DIR" >> $GITHUB_ENV
-
-      - name: Upload all information
+      - name: Upload initial artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: remote-access-setup
+          name: initial-screenshots
           path: |
-            ${{ env.INFO_DIR }}
-            ${{ env.RUSTDESK_DIR }}
+            ${{ env.SCREENSHOT_DIR }}
+            ${{ env.SSHX_SESSION_FILE }}
+          retention-days: 1
+
+      - name: Keep system alive for 20 minutes
+        run: |
+          echo "=== SSHX Remote Access Active ==="
+          echo ""
+          echo "✅ sshx session is running"
+          echo "✅ Screenshots being captured every 2 minutes"
+          echo ""
+          echo "Start time: $(date)"
+          echo "Will keep alive until: $(date -v+20M)"
+          echo ""
+          
+          # Display session info if available
+          if [ -f "$SSHX_SESSION_FILE" ]; then
+            echo "=== Session Information ==="
+            grep -i "connect\|join\|session\|http" "$SSHX_SESSION_FILE" | head -5
+            echo ""
+          fi
+          
+          # Run for 20 minutes, taking screenshots every 2 minutes
+          for minute in {1..20}; do
+            echo ""
+            echo "=== Minute $minute/20 ==="
+            echo "Time: $(date)"
+            
+            # Check if sshx is still running
+            if ps -p $SSHX_PID > /dev/null 2>&1; then
+              echo "✅ sshx: Running (PID: $SSHX_PID)"
+            else
+              echo "❌ sshx: Not running, restarting..."
+              (sshx --background 2>&1 | tee -a "$SSHX_SESSION_FILE") &
+              SSHX_PID=$!
+              echo "New PID: $SSHX_PID"
+            fi
+            
+            # Take screenshot every 2 minutes
+            if [ $((minute % 2)) -eq 0 ]; then
+              timestamp=$(date +%Y%m%d_%H%M%S)
+              screenshot_file="$SCREENSHOT_DIR/periodic_${timestamp}.png"
+              echo "📸 Taking screenshot..."
+              sudo screencapture -x "$screenshot_file" 2>/dev/null || true
+              
+              if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+                size=$(ls -lh "$screenshot_file" | awk '{print $5}')
+                echo "   Saved: $(basename "$screenshot_file") (${size})"
+              fi
+            fi
+            
+            # Countdown
+            remaining=$((20 - minute))
+            if [ $remaining -gt 0 ]; then
+              echo "⏳ Remaining: ${remaining} minutes"
+              sleep 60  # Wait 1 minute
+            fi
+          done
+          
+          echo ""
+          echo "✅ 20 minutes complete. Session ending."
+
+      - name: Upload final screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-screenshots
+          path: |
             ${{ env.SCREENSHOT_DIR }}
           retention-days: 1
 
-      - name: Keep system alive with monitoring
-        run: |
-          echo "=== SYSTEM IS READY FOR REMOTE ACCESS ==="
-          echo ""
-          echo "📡 ACCESS METHODS:"
-          echo ""
-          
-          # Display VNC info
-          echo "1. VNC ACCESS:"
-          echo "   Port: 5900"
-          echo "   Password: myvncpassword"
-          
-          # Display Tailscale info
-          TS_IP=$(tailscale ip --4 2>/dev/null | head -1 || echo "Not connected")
-          echo ""
-          echo "2. TAILSCALE VPN:"
-          echo "   IP: $TS_IP"
-          
-          # Display local IP
-          LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "Unknown")
-          echo ""
-          echo "3. LOCAL NETWORK:"
-          echo "   IP: $LOCAL_IP"
-          
-          echo ""
-          echo "⏰ SYSTEM WILL REMAIN ACTIVE FOR 6 HOURS"
-          echo "Started: $(date)"
-          echo "Will run until: $(date -v+6H)"
-          echo ""
-          echo "📊 Monitoring services..."
-          echo ""
-          
-          # Monitoring loop
-          COUNTER=0
-          while true; do
-            COUNTER=$((COUNTER + 1))
-            MINUTES=$((COUNTER * 5))
-            
-            echo ""
-            echo "=== STATUS CHECK (${MINUTES} minutes) ==="
-            echo "Time: $(date)"
-            
-            # Check VNC
-            if sudo lsof -i :5900 &>/dev/null; then
-              echo "✅ VNC: Running on port 5900"
-            else
-              echo "❌ VNC: Not found on 5900"
-              echo "   Attempting to restart VNC..."
-              sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent 2>/dev/null || true
-            fi
-            
-            # Check Tailscale
-            if tailscale status &>/dev/null && tailscale ip --4 &>/dev/null; then
-              TS_CURRENT_IP=$(tailscale ip --4 2>/dev/null | head -1)
-              echo "✅ Tailscale: Connected ($TS_CURRENT_IP)"
-            else
-              echo "❌ Tailscale: Not connected"
-              echo "   Attempting to reconnect..."
-              sudo tailscale up --authkey tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf --reset 2>/dev/null || true
-            fi
-            
-            # Check RustDesk
-            if pgrep -f "RustDesk" &>/dev/null; then
-              echo "✅ RustDesk: Running"
-            else
-              echo "❌ RustDesk: Not running, restarting..."
-              open -a /Applications/RustDesk.app 2>/dev/null || true
-            fi
-            
-            # Take periodic screenshot every 30 minutes
-            if [ $((COUNTER % 6)) -eq 0 ]; then
-              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-              PERIODIC_FILE="$SCREENSHOT_DIR/monitor_${TIMESTAMP}.png"
-              screencapture -x "$PERIODIC_FILE" 2>/dev/null || true
-              echo "📸 Periodic screenshot: $PERIODIC_FILE"
-            fi
-            
-            echo ""
-            echo "Next check in 5 minutes..."
-            sleep 300
-          done
-
-      - name: Final cleanup
+      - name: Cleanup
         if: always()
         run: |
-          echo "=== FINAL CLEANUP ==="
-          echo "Time: $(date)"
+          echo "=== Cleaning up ==="
           
-          # Save final status
-          FINAL_LOG="$HOME/final_status.log"
-          echo "Final system status at $(date)" > "$FINAL_LOG"
+          # Kill sshx process
+          if [ ! -z "$SSHX_PID" ] && ps -p $SSHX_PID > /dev/null 2>&1; then
+            echo "Stopping sshx (PID: $SSHX_PID)..."
+            kill $SSHX_PID 2>/dev/null || true
+          fi
           
-          echo "1. Stopping RustDesk..." | tee -a "$FINAL_LOG"
-          pkill -f "RustDesk" 2>/dev/null || echo "RustDesk not running" >> "$FINAL_LOG"
-          
-          echo "2. Disconnecting Tailscale..." | tee -a "$FINAL_LOG"
-          sudo tailscale down 2>/dev/null || echo "Tailscale not running" >> "$FINAL_LOG"
-          
-          echo "3. Disabling VNC/ARD..." | tee -a "$FINAL_LOG"
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -deactivate -configure -access -off 2>/dev/null || echo "ARD already disabled" >> "$FINAL_LOG"
-          
-          echo "4. Final screenshot..." | tee -a "$FINAL_LOG"
-          screencapture -x "$HOME/final_screenshot.png" 2>/dev/null || echo "Screenshot failed" >> "$FINAL_LOG"
+          # Kill any other sshx processes
+          pkill -f "sshx" 2>/dev/null || true
           
           echo "✅ Cleanup complete"
-          echo "Log saved to: $FINAL_LOG"
-          
-          # Upload final log
-          actions/upload-artifact@v4
-          with:
-            name: final-status
-            path: |
-              $HOME/final_status.log
-              $HOME/final_screenshot.png
