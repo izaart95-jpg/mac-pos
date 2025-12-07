@@ -1,375 +1,161 @@
-name: macOS Settings Screenshot
+name: SSHX Remote Access with Screenshots
 
 on:
   workflow_dispatch:
 
 jobs:
-  settings-screenshots:
+  setup-sshx:
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 25  # 5 minutes setup + 20 minutes keepalive
 
     steps:
       - name: Create screenshot directory
         run: |
           mkdir -p screenshots
           echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
+          echo "SSHX_SESSION_FILE=$(pwd)/sshx_session.txt" >> $GITHUB_ENV
 
-      - name: Detect macOS version
+      - name: Take initial screenshot
         run: |
-          macos_version=$(sw_vers -productVersion)
-          echo "macOS Version: $macos_version"
-          echo "MACOS_VERSION=$macos_version" >> $GITHUB_ENV
+          echo "=== Taking initial screenshot ==="
+          screenshot_file="$SCREENSHOT_DIR/initial_$(date +%s).png"
+          sudo screencapture -x "$screenshot_file" 2>/dev/null || true
           
-          # Extract major version
-          major_version=$(echo $macos_version | cut -d. -f1)
-          echo "Major Version: $major_version"
-          echo "MAJOR_VERSION=$major_version" >> $GITHUB_ENV
-
-      - name: Open System Settings
-        run: |
-          # Close System Settings if already open
-          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-          sleep 2
-          
-          echo "Opening System Settings..."
-          open -a "System Settings"
-          sleep 5
-          
-          # Wait for System Settings to fully load
-          osascript -e '
-            tell application "System Settings"
-              activate
-              repeat 10 times
-                if it is running then
-                  exit repeat
-                end if
-                delay 1
-              end repeat
-              delay 2
-            end tell
-          '
-
-      - name: Take screenshot of main Settings window
-        run: |
-          echo "Taking screenshot of main Settings window..."
-          
-          # Simple full screen screenshot
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screenshot_file="$SCREENSHOT_DIR/00_main_settings_${timestamp}.png"
-          screencapture -x "$screenshot_file"
-          
-          # Also take a focused window screenshot
-          sleep 1
-          screencapture -w "$SCREENSHOT_DIR/01_main_window_${timestamp}.png"
-          
-          echo "✓ Main screenshots saved"
-
-      - name: Method 1 - Direct URL navigation (macOS 13+)
-        run: |
-          echo "Method 1: Using direct URLs (macOS 13+)..."
-          
-          # Close and reopen for clean state
-          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-          sleep 2
-          
-          # Navigate directly using URLs (works on Ventura+)
-          open "x-apple.systempreferences:com.apple.settings.General"
-          sleep 3
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/02_general_url_${timestamp}.png"
-          echo "✓ General via URL"
-          
-          open "x-apple.systempreferences:com.apple.settings.Sharing"
-          sleep 3
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/03_sharing_url_${timestamp}.png"
-          echo "✓ Sharing via URL"
-
-      - name: Method 2 - AppleScript for older macOS
-        if: ${{ env.MAJOR_VERSION < 13 }}
-        run: |
-          echo "Method 2: AppleScript for macOS 12 or earlier..."
-          
-          osascript -e 'tell application "System Preferences" to quit' 2>/dev/null || true
-          sleep 2
-          open -a "System Preferences"
-          sleep 3
-          
-          osascript << 'EOF'
-            tell application "System Preferences"
-              activate
-              reveal anchor "General" of pane "com.apple.preference.general"
-              delay 2
-            end tell
-          EOF
-          
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/04_general_legacy_${timestamp}.png"
-          echo "✓ General (legacy)"
-          
-          osascript << 'EOF'
-            tell application "System Preferences"
-              activate
-              reveal anchor "SharingPref" of pane "com.apple.preference.sharing"
-              delay 2
-            end tell
-          EOF
-          
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/05_sharing_legacy_${timestamp}.png"
-          echo "✓ Sharing (legacy)"
-
-      - name: Method 3 - UI navigation with accessibility
-        run: |
-          echo "Method 3: UI navigation with accessibility checks..."
-          
-          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-          sleep 2
-          open -a "System Settings"
-          sleep 5
-          
-          # First, get UI structure for debugging
-          echo "Getting UI structure..."
-          osascript << 'EOF' > "$SCREENSHOT_DIR/ui_structure.txt" 2>&1 || true
-            tell application "System Events"
-              tell process "System Settings"
-                -- List all windows
-                repeat with i from 1 to (count windows)
-                  try
-                    log "Window " & i & ": " & name of window i
-                  end try
-                end repeat
-                
-                -- List UI elements
-                tell window 1
-                  repeat with i from 1 to (count entire contents)
-                    try
-                      set elem to UI element i
-                      log "Element " & i & ": " & (class of elem as text) & " - " & (name of elem as text)
-                    end try
-                  end repeat
-                end tell
-              end tell
-            end tell
-          EOF
-          
-          echo "UI structure saved to ui_structure.txt"
-
-      - name: Method 4 - Keyboard navigation
-        run: |
-          echo "Method 4: Keyboard navigation..."
-          
-          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-          sleep 2
-          open -a "System Settings"
-          sleep 3
-          
-          # Use keyboard to navigate
-          osascript << 'EOF'
-            tell application "System Settings"
-              activate
-              delay 2
-            end tell
-            
-            tell application "System Events"
-              delay 1
-              
-              -- Press Cmd+F to focus search
-              keystroke "f" using command down
-              delay 1
-              
-              -- Search for General
-              keystroke "General"
-              delay 2
-              
-              -- Press Enter to select first result
-              key code 36
-              delay 3
-            end tell
-          EOF
-          
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/06_general_search_${timestamp}.png"
-          echo "✓ General via search"
-          
-          # Now search for Sharing
-          osascript << 'EOF'
-            tell application "System Events"
-              -- Press Cmd+F to focus search again
-              keystroke "f" using command down
-              delay 1
-              
-              -- Clear and search for Sharing
-              keystroke "a" using command down
-              keystroke (ASCII character 127)
-              keystroke "Sharing"
-              delay 2
-              
-              -- Press Enter
-              key code 36
-              delay 3
-            end tell
-          EOF
-          
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/07_sharing_search_${timestamp}.png"
-          echo "✓ Sharing via search"
-
-      - name: Method 5 - Sidebar navigation
-        run: |
-          echo "Method 5: Sidebar navigation (macOS 13+)..."
-          
-          if [[ "$MAJOR_VERSION" -ge 13 ]]; then
-            osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-            sleep 2
-            open -a "System Settings"
-            sleep 3
-            
-            osascript << 'EOF'
-              tell application "System Settings"
-                activate
-                delay 2
-              end tell
-              
-              tell application "System Events"
-                tell process "System Settings"
-                  -- Try to find and click General in sidebar
-                  try
-                    click (first button of scroll area 1 whose name is "General")
-                    delay 2
-                  on error
-                    -- Alternative: Try list elements
-                    try
-                      tell outline 1 of scroll area 1
-                        click (first UI element whose name is "General")
-                        delay 2
-                      end tell
-                    end try
-                  end try
-                end tell
-              end tell
-            EOF
-            
-            timestamp=$(date +%Y%m%d_%H%M%S)
-            screencapture -x "$SCREENSHOT_DIR/08_general_sidebar_${timestamp}.png"
-            echo "✓ General via sidebar"
-            
-            # Navigate to Sharing
-            osascript << 'EOF'
-              tell application "System Events"
-                tell process "System Settings"
-                  try
-                    click (first button of scroll area 1 whose name is "Sharing")
-                    delay 2
-                  on error
-                    try
-                      tell outline 1 of scroll area 1
-                        click (first UI element whose name is "Sharing")
-                        delay 2
-                      end tell
-                    end try
-                  end try
-                end tell
-              end tell
-            EOF
-            
-            timestamp=$(date +%Y%m%d_%H%M%S)
-            screencapture -x "$SCREENSHOT_DIR/09_sharing_sidebar_${timestamp}.png"
-            echo "✓ Sharing via sidebar"
+          if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+            size=$(ls -lh "$screenshot_file" | awk '{print $5}')
+            echo "✅ Initial screenshot saved: ${size}"
           else
-            echo "Skipping sidebar navigation for macOS < 13"
+            echo "⚠️ Could not take initial screenshot"
           fi
 
-      - name: Method 6 - Simple screenshots with descriptions
+      - name: Install sshx
         run: |
-          echo "Method 6: Taking descriptive screenshots..."
-          
-          # Just take screenshots at intervals with descriptions
-          echo "Taking baseline screenshot..."
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$SCREENSHOT_DIR/10_baseline_${timestamp}.png"
-          
-          # Create a description file
-          cat > "$SCREENSHOT_DIR/descriptions.txt" << EOF
-          Screenshots taken on: $(date)
-          macOS Version: $MACOS_VERSION
-          
-          00_main_settings.png - Main System Settings window
-          01_main_window.png - Focused System Settings window
-          02_general_url.png - General settings via direct URL
-          03_sharing_url.png - Sharing settings via direct URL
-          04_general_legacy.png - General (legacy method for macOS < 13)
-          05_sharing_legacy.png - Sharing (legacy method for macOS < 13)
-          06_general_search.png - General accessed via search
-          07_sharing_search.png - Sharing accessed via search
-          08_general_sidebar.png - General via sidebar navigation
-          09_sharing_sidebar.png - Sharing via sidebar navigation
-          10_baseline.png - Baseline screenshot
-          
-          Note: Not all methods may work depending on macOS version.
-          EOF
-          
-          echo "✓ Descriptive screenshots taken"
+          echo "=== Installing sshx ==="
+          curl -sSf https://sshx.io/get | sh
+          echo "✅ sshx installed"
 
-      - name: List and verify screenshots
+      - name: Run sshx in background
         run: |
-          echo "=== Screenshots Summary ==="
-          echo "Directory: $SCREENSHOT_DIR"
+          echo "=== Starting sshx session ==="
+          
+          # Run sshx in background and capture output
+          sshx 2>&1 | tee "$SSHX_SESSION_FILE" &
+          SSHX_PID=$!
+          echo "SSHX_PID=$SSHX_PID" >> $GITHUB_ENV
+          
+          # Wait a moment for sshx to start
+          sleep 8
+          
+          # Check if sshx is running
+          if ps -p $SSHX_PID > /dev/null 2>&1; then
+            echo "✅ sshx running with PID: $SSHX_PID"
+          else
+            echo "⚠️ sshx may have exited"
+          fi
+          
+          # Show session info
           echo ""
-          
-          if [ -d "$SCREENSHOT_DIR" ]; then
-            total_files=$(find "$SCREENSHOT_DIR" -type f -name "*.png" | wc -l)
-            echo "Total PNG files: $total_files"
-            
-            echo ""
-            echo "File list:"
-            ls -la "$SCREENSHOT_DIR/"*.png 2>/dev/null || echo "No PNG files found"
-            
-            echo ""
-            echo "File sizes:"
-            for file in "$SCREENSHOT_DIR"/*.png; do
-              if [ -f "$file" ]; then
-                size=$(ls -lh "$file" | awk '{print $5}')
-                echo "  $(basename "$file"): $size"
-              fi
-            done
-          else
-            echo "ERROR: Screenshots directory not found!"
+          echo "=== SSHX Session Info ==="
+          if [ -f "$SSHX_SESSION_FILE" ]; then
+            cat "$SSHX_SESSION_FILE" | grep -i -A2 -B2 "connect\|join\|session\|http\|link\|url" || true
           fi
+          
+          # Take screenshot after sshx starts
+          echo ""
+          echo "Taking post-startup screenshot..."
+          screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
+          sudo screencapture -x "$screenshot_file" 2>/dev/null || true
 
-      - name: Upload screenshots as artifact
+      - name: Upload initial artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-settings-screenshots
+          name: initial-screenshots
           path: |
             ${{ env.SCREENSHOT_DIR }}
-            !${{ env.SCREENSHOT_DIR }}/.DS_Store
-          retention-days: 7
-          if-no-files-found: error
-          compression-level: 6
+            ${{ env.SSHX_SESSION_FILE }}
+          retention-days: 1
 
-      - name: Upload UI structure as separate artifact
-        uses: actions/upload-artifact@v4
+      - name: Keep alive for 20 minutes
+        run: |
+          echo "=== SSHX Remote Access Active ==="
+          echo ""
+          echo "Start time: $(date)"
+          echo "Will keep alive until: $(date -v+20M)"
+          echo ""
+          
+          # Display session info if available
+          if [ -f "$SSHX_SESSION_FILE" ]; then
+            echo "=== Session Information ==="
+            cat "$SSHX_SESSION_FILE" | grep -i "connect\|join\|session\|http\|link\|url" | head -5 || true
+            echo ""
+          fi
+          
+          # Keep alive for 20 minutes
+          for minute in {1..20}; do
+            echo "=== Minute $minute/20 ==="
+            echo "Time: $(date)"
+            
+            # Check if sshx is running
+            if ps -p $SSHX_PID > /dev/null 2>&1; then
+              echo "✅ sshx: Running (PID: $SSHX_PID)"
+            else
+              echo "❌ sshx: Not running, attempting to restart..."
+              # Kill any remaining sshx processes
+              pkill -f "sshx" 2>/dev/null || true
+              sleep 2
+              # Restart sshx
+              sshx 2>&1 | tee -a "$SSHX_SESSION_FILE" &
+              SSHX_PID=$!
+              echo "New PID: $SSHX_PID"
+              sleep 5
+            fi
+            
+            # Take screenshot every 2 minutes
+            if [ $((minute % 2)) -eq 0 ]; then
+              timestamp=$(date +%Y%m%d_%H%M%S)
+              screenshot_file="$SCREENSHOT_DIR/periodic_${timestamp}.png"
+              echo "📸 Taking screenshot..."
+              sudo screencapture -x "$screenshot_file" 2>/dev/null || true
+              
+              if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+                size=$(ls -lh "$screenshot_file" | awk '{print $5}')
+                echo "   Saved: $(basename "$screenshot_file") (${size})"
+              fi
+            fi
+            
+            # Wait for next minute
+            if [ $minute -lt 20 ]; then
+              remaining=$((20 - minute))
+              echo "⏳ Remaining: ${remaining} minutes"
+              sleep 60
+            fi
+          done
+          
+          echo ""
+          echo "✅ 20 minutes complete."
+
+      - name: Upload final artifacts
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: macos-ui-debug-info
+          name: final-screenshots
           path: |
-            ${{ env.SCREENSHOT_DIR }}/ui_structure.txt
-            ${{ env.SCREENSHOT_DIR }}/descriptions.txt
-          retention-days: 7
+            ${{ env.SCREENSHOT_DIR }}
+          retention-days: 1
 
       - name: Cleanup
         if: always()
         run: |
-          echo "Cleaning up..."
-          # Close System Settings
-          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
-          osascript -e 'tell application "System Preferences" to quit' 2>/dev/null || true
+          echo "=== Cleaning up ==="
           
-          # Summary
-          if [ -d "$SCREENSHOT_DIR" ]; then
-            screenshot_count=$(find "$SCREENSHOT_DIR" -name "*.png" -type f | wc -l)
-            echo "Total screenshots captured: $screenshot_count"
+          # Kill sshx process
+          if [ ! -z "$SSHX_PID" ] && ps -p $SSHX_PID > /dev/null 2>&1; then
+            echo "Stopping sshx (PID: $SSHX_PID)..."
+            kill $SSHX_PID 2>/dev/null || true
+            sleep 2
           fi
           
-          echo "Workflow completed!"
+          # Kill any other sshx processes
+          pkill -f "sshx" 2>/dev/null || true
+          
+          echo "✅ Cleanup complete"
