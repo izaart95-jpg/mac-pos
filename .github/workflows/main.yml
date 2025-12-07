@@ -1,201 +1,216 @@
-name: RustDesk Screenshot macOS
+name: macOS Settings Screenshot
 
 on:
   workflow_dispatch:
 
 jobs:
-  rustdesk-screenshot:
+  settings-screenshots:
     runs-on: macos-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
 
     steps:
-      - name: Download RustDesk
-        run: |
-          curl -L -o rustdesk.dmg "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
-          hdiutil attach rustdesk.dmg -mountpoint /Volumes/RustDesk -nobrowse
-          sudo cp -R "/Volumes/RustDesk/RustDesk.app" /Applications/
-          hdiutil detach /Volumes/RustDesk
-
       - name: Create screenshot directory
         run: |
           mkdir -p screenshots
           echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
 
-      - name: Auto-click "Allow" on permission popup
+      - name: Open System Settings
         run: |
-          # Create AppleScript to click "Allow" button
-          cat > /tmp/click_allow.applescript << 'EOF'
-          tell application "System Events"
-            repeat with i from 1 to 30
-              try
-                if exists (process "SecurityAgent") then
-                  tell process "SecurityAgent"
-                    repeat with w in windows
-                      try
-                        if exists (button "Allow" of w) then
-                          click button "Allow" of w
-                          log "Clicked 'Allow' button"
-                          return true
-                        end if
-                      end try
-                    end repeat
-                    
-                    # Also try "Open System Preferences" if "Allow" isn't visible
-                    repeat with w in windows
-                      try
-                        if exists (button "Open System Preferences" of w) then
-                          click button "Open System Preferences" of w
-                          log "Clicked 'Open System Preferences'"
-                          delay 2
-                          
-                          # In System Preferences, click the checkbox
-                          tell application "System Preferences"
-                            activate
-                            delay 1
-                          end tell
-                          
-                          tell process "System Preferences"
-                            if exists (checkbox 1 of tab group 1 of window 1) then
-                              click checkbox 1 of tab group 1 of window 1
-                              log "Checked screen recording permission"
-                              delay 1
-                              
-                              # Close System Preferences
-                              keystroke "w" using command down
-                              return true
-                            end if
-                          end tell
-                        end if
-                      end try
-                    end repeat
-                  end tell
+          # Close System Settings if already open
+          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
+          sleep 2
+          
+          # Open System Settings to main page
+          open -a "System Settings"
+          sleep 3
+          
+          # Wait for System Settings to fully load
+          osascript -e '
+            tell application "System Settings"
+              activate
+              delay 3
+            end tell
+          '
+
+      - name: Take screenshot of main Settings window
+        run: |
+          echo "Taking screenshot of main Settings window..."
+          
+          # Get window ID of System Settings
+          window_info=$(osascript << 'EOF'
+            tell application "System Events"
+              tell process "System Settings"
+                if exists window 1 then
+                  set windowPos to position of window 1
+                  set windowSize to size of window 1
+                  return windowPos & "," & windowSize
+                else
+                  return "0,0,800,600"
                 end if
-              end try
+              end tell
+            end tell
+          EOF
+          )
+          
+          # Take full screen screenshot
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          screenshot_file="$SCREENSHOT_DIR/settings_main_${timestamp}.png"
+          screencapture -x "$screenshot_file"
+          
+          # Crop if we got window info
+          if [[ "$window_info" != "0,0,800,600" ]]; then
+            IFS=',' read -r posX posY sizeX sizeY <<< "$window_info"
+            echo "Window info: Position ($posX, $posY), Size ($sizeX, $sizeY)"
+          fi
+          
+          echo "✓ Screenshot saved: $screenshot_file"
+
+      - name: Navigate to General and take screenshot
+        run: |
+          echo "Navigating to General settings..."
+          
+          osascript << 'EOF'
+            tell application "System Settings"
+              activate
               delay 1
-            end repeat
-            return false
-          end tell
+            end tell
+            
+            tell application "System Events"
+              tell process "System Settings"
+                # Navigate to General
+                repeat with sidebarItem in outline 1 of scroll area 1 of group 1 of splitter group 1 of window 1
+                  try
+                    if name of static text 1 of UI element 1 of sidebarItem contains "General" then
+                      select sidebarItem
+                      log "Selected General"
+                      delay 2
+                      exit repeat
+                    end if
+                  end try
+                end repeat
+                
+                # Wait for General page to load
+                delay 2
+              end tell
+            end tell
           EOF
           
-          # Run AppleScript in background to handle the prompt
-          osascript /tmp/click_allow.applescript &
+          # Take screenshot
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          screenshot_file="$SCREENSHOT_DIR/settings_general_${timestamp}.png"
+          screencapture -x "$screenshot_file"
+          echo "✓ General settings screenshot: $screenshot_file"
 
-      - name: Start RustDesk and handle permission
+      - name: Navigate to Sharing and take screenshot
         run: |
-          echo "Starting RustDesk..."
-          open -a /Applications/RustDesk.app
+          echo "Navigating to Sharing settings..."
           
-          # Wait for permission popup to appear
-          echo "Waiting for permission popup..."
-          sleep 15
-          
-          # Force a screenshot attempt to trigger the popup
-          echo "Triggering screen recording request..."
-          screencapture -x /tmp/test_trigger.png 2>/dev/null || true
-          sleep 5
-          
-          # Check if RustDesk is running
-          if pgrep -f "RustDesk" > /dev/null; then
-            echo "✓ RustDesk is running"
-          else
-            echo "✗ RustDesk not running, trying again..."
-            open -a /Applications/RustDesk.app
-            sleep 10
-          fi
-
-      - name: Take screenshots with manual approval simulation
-        run: |
-          echo "Taking screenshots..."
-          
-          # Method 1: Try normal screenshot
-          for i in {1..5}; do
-            echo "Attempt $i..."
-            screenshot_file="$SCREENSHOT_DIR/screenshot_$i.png"
+          osascript << 'EOF'
+            tell application "System Settings"
+              activate
+              delay 1
+            end tell
             
-            if screencapture -x "$screenshot_file" 2>/dev/null; then
-              if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
-                size=$(ls -lh "$screenshot_file" | awk '{print $5}')
-                echo "✓ Success! File: $screenshot_file (${size})"
-                break
-              fi
-            else
-              echo "✗ Failed attempt $i"
-              
-              # If we're failing, try to trigger the popup again
-              if [ $i -eq 2 ]; then
-                echo "Trying to trigger permission dialog again..."
-                # Simulate a system event that might trigger the dialog
-                osascript -e 'tell application "System Events" to key code 53' 2>/dev/null || true
-                sleep 3
-              fi
-            fi
-            sleep 3
-          done
+            tell application "System Events"
+              tell process "System Settings"
+                # Navigate to General first if needed (for reliable navigation)
+                repeat with sidebarItem in outline 1 of scroll area 1 of group 1 of splitter group 1 of window 1
+                  try
+                    if name of static text 1 of UI element 1 of sidebarItem contains "General" then
+                      select sidebarItem
+                      delay 1
+                      exit repeat
+                    end if
+                  end try
+                end repeat
+                
+                # Now navigate to Sharing
+                repeat with sidebarItem in outline 1 of scroll area 1 of group 1 of splitter group 1 of window 1
+                  try
+                    if name of static text 1 of UI element 1 of sidebarItem contains "Sharing" then
+                      select sidebarItem
+                      log "Selected Sharing"
+                      delay 2
+                      exit repeat
+                    end if
+                  end try
+                end repeat
+                
+                # Wait for Sharing page to load
+                delay 2
+              end tell
+            end tell
+          EOF
           
-          # If still no success, create a debug screenshot showing the popup
-          if [ ! -f "$SCREENSHOT_DIR/screenshot_1.png" ] || [ ! -s "$SCREENSHOT_DIR/screenshot_1.png" ]; then
-            echo "Creating debug information..."
-            echo "The screenshot shows a macOS permission popup that says:" > "$SCREENSHOT_DIR/README.txt"
-            echo '"bash" is requesting to bypass the system privacy window picker' >> "$SCREENSHOT_DIR/README.txt"
-            echo 'and directly access your screen and audio' >> "$SCREENSHOT_DIR/README.txt"
-            echo "" >> "$SCREENSHOT_DIR/README.txt"
-            echo "This requires manual interaction to click 'Allow'" >> "$SCREENSHOT_DIR/README.txt"
-            echo "In CI environments, this cannot be automated reliably." >> "$SCREENSHOT_DIR/README.txt"
+          # Take screenshot
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          screenshot_file="$SCREENSHOT_DIR/settings_sharing_${timestamp}.png"
+          screencapture -x "$screenshot_file"
+          echo "✓ Sharing settings screenshot: $screenshot_file"
+
+      - name: Alternative navigation method (if needed)
+        if: failure()
+        run: |
+          echo "Trying alternative navigation method..."
+          
+          # Close and reopen to reset
+          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
+          sleep 2
+          
+          # Open directly to specific URLs (macOS Ventura+)
+          open "x-apple.systempreferences:com.apple.settings.General"
+          sleep 3
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          screencapture -x "$SCREENSHOT_DIR/alternative_general_${timestamp}.png"
+          
+          open "x-apple.systempreferences:com.apple.settings.Sharing"
+          sleep 3
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          screencapture -x "$SCREENSHOT_DIR/alternative_sharing_${timestamp}.png"
+
+      - name: Take additional full screenshots with different methods
+        run: |
+          echo "Taking additional screenshots with different methods..."
+          
+          # Method 1: Full screen
+          screencapture -x "$SCREENSHOT_DIR/fullscreen_1.png"
+          sleep 1
+          
+          # Method 2: With timestamp
+          screencapture -t png "$SCREENSHOT_DIR/fullscreen_2.png"
+          sleep 1
+          
+          # Method 3: Without shadow
+          screencapture -o -x "$SCREENSHOT_DIR/fullscreen_no_shadow.png"
+          
+          echo "✓ Additional screenshots taken"
+
+      - name: List all screenshots
+        run: |
+          echo "=== Screenshots captured ==="
+          ls -la "$SCREENSHOT_DIR/" || echo "No screenshots directory found"
+          
+          if [ -d "$SCREENSHOT_DIR" ]; then
+            echo "Total files in $SCREENSHOT_DIR:"
+            find "$SCREENSHOT_DIR" -type f -name "*.png" | wc -l
           fi
 
-      - name: Upload screenshots
+      - name: Upload screenshots as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-screenshots
+          name: macos-settings-screenshots
           path: ${{ env.SCREENSHOT_DIR }}
-          retention-days: 1
-
-      - name: Keep workflow running
-        run: |
-          echo "=== Keeping workflow alive ==="
-          echo "Workflow will run until timeout (6 hours)"
-          echo "RustDesk is installed but needs manual permission"
-          echo ""
-          echo "To fix this permanently on a macOS machine:"
-          echo "1. Run RustDesk manually once"
-          echo "2. Click 'Allow' on the permission popup"
-          echo "3. Then automated screenshots will work"
-          echo ""
-          echo "Current time: $(date)"
-          echo "Will run until: $(date -v+6H)"
-          
-          # Keep the job alive
-          start_time=$(date +%s)
-          while true; do
-            current_time=$(date +%s)
-            elapsed=$((current_time - start_time))
-            hours=$((elapsed / 3600))
-            minutes=$(((elapsed % 3600) / 60))
-            
-            echo "[$(date '+%H:%M:%S')] Still running... (Elapsed: ${hours}h ${minutes}m)"
-            
-            # Take a screenshot every 10 minutes
-            if [ $((elapsed % 600)) -lt 10 ]; then
-              timestamp=$(date +%Y%m%d_%H%M%S)
-              debug_file="$SCREENSHOT_DIR/debug_${timestamp}.png"
-              screencapture -x "$debug_file" 2>/dev/null || true
-              echo "  Debug screenshot: $debug_file"
-            fi
-            
-            # Check RustDesk status
-            if pgrep -f "RustDesk" > /dev/null; then
-              echo "  RustDesk: Running"
-            else
-              echo "  RustDesk: Not running"
-            fi
-            
-            sleep 60  # Check every minute
-          done
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Cleanup
         if: always()
         run: |
           echo "Cleaning up..."
-          pkill -f "RustDesk" 2>/dev/null || true
-          pkill -f "System Events" 2>/dev/null || true
-          rm -f rustdesk.dmg 2>/dev/null || true
+          # Close System Settings
+          osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
+          
+          # Kill any hanging processes
+          pkill -f "System Settings" 2>/dev/null || true
+          
+          echo "Cleanup complete"
