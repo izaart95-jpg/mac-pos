@@ -114,28 +114,6 @@ jobs:
           echo "All screenshots:"
           ls -lh "$WORK_DIR"/*.png 2>/dev/null || echo "No PNG files found"
 
-      - name: Capture RustDesk window specifically (optional)
-        run: |
-          cd "$WORK_DIR"
-          
-          # Try to capture RustDesk window specifically using its PID
-          rustdesk_pid=$(pgrep -f "RustDesk" | head -1)
-          
-          if [ ! -z "$rustdesk_pid" ]; then
-            echo "RustDesk PID: $rustdesk_pid"
-            
-            # Get window information
-            echo "Listing windows:"
-            osascript -e 'tell application "System Events" to get name of every window of (every process whose visible is true)' 2>/dev/null || true
-            
-            # Try to capture specific window
-            for i in {1..2}; do
-              echo "Capturing window screenshot $i..."
-              screencapture -l$(osascript -e 'tell application "System Events" to get id of window 1 of (first process whose name is "RustDesk")' 2>/dev/null || echo "") -x "$WORK_DIR/rustdesk_window_$i.png" 2>/dev/null
-              sleep 2
-            done
-          fi
-
       - name: Take additional screenshots with timestamp
         run: |
           cd "$WORK_DIR"
