@@ -1,4 +1,4 @@
-name: RustDesk with VNC & Tailscale Remote Access
+name: macOS Remote Access Setup
 
 on:
   workflow_dispatch:
@@ -6,291 +6,163 @@ on:
 jobs:
   setup-remote-access:
     runs-on: macos-latest
-    timeout-minutes: 360
+    timeout-minutes: 30  # Total 30 minutes: 10 for setup + 20 keepalive
 
     steps:
       - name: Setup VNC with ARD
         run: |
           echo "=== Setting up Apple Remote Desktop/VNC ==="
           
-          # Activate and configure ARD agent with full privileges
+          # Activate and configure ARD agent
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -restart -agent -privs -all
           
           # Enable legacy VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvnclegacy -vnclegacy yes
+            -configure -clientopts -setvnclegacy yes -vnclegacy yes
           
-          # Set VNC password (using a default password, change if needed)
+          # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvncpw myvncpassword -vncpw myvncpassword
+            -configure -clientopts -setvncpw yourpassword -vncpw yourpassword
           
           # Allow access for all users
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -configure -allowAccessFor -allUsers
           
           echo "✅ VNC/ARD setup complete"
-          echo "VNC Password: myvncpassword"
-          echo ""
-          
-          # Restart the service to apply changes
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -restart -agent
-          
-          sleep 5
+          echo "VNC Password: yourpassword"
 
-      - name: Install and configure Tailscale
+      - name: Install Tailscale
         run: |
           echo "=== Installing Tailscale ==="
           
-          # Install Tailscale from official script
+          # Install Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           
           # Start tailscaled service
           echo "Starting tailscaled service..."
           sudo tailscaled 2>/dev/null || true
           
-          # If command not found, try alternative paths
-          if ! command -v tailscale &> /dev/null; then
-            echo "Tailscale command not found, trying alternative..."
-            
-            # Try to start via the app
-            sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale --cleanup 2>/dev/null || true
-            sudo tailscaled 2>/dev/null || true
-            
-            # If still not found, try Homebrew
-            if ! command -v brew &> /dev/null; then
-              echo "Installing Homebrew..."
-              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            fi
-            
-            echo "Installing Tailscale via Homebrew..."
-            brew install tailscale
-            sudo brew services start tailscaled
-          fi
-          
-          # Wait a moment for service to start
+          # Wait a moment
           sleep 3
-          
-          echo "✅ Tailscale installation complete"
 
       - name: Authenticate Tailscale
         run: |
           echo "=== Authenticating Tailscale ==="
           
-          # Auth key - replace with your actual key
+          # Try tailscale command
+          if command -v tailscale &> /dev/null; then
+            echo "Tailscale command found at: $(which tailscale)"
+          else
+            echo "Tailscale command not found, trying alternatives..."
+            
+            # Try to start via the app
+            sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale --cleanup 2>/dev/null || true
+            sudo tailscaled 2>/dev/null || true
+            sleep 2
+          fi
+          
+          # If still not found, install via Homebrew
+          if ! command -v tailscale &> /dev/null; then
+            echo "Installing Homebrew and Tailscale..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            brew install tailscale
+            sudo brew services start tailscaled
+            sleep 5
+          fi
+          
+          # Authenticate with Tailscale
           AUTH_KEY="tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf"
           
-          echo "Authenticating with Tailscale..."
-          
-          # Try multiple times with delays
-          for attempt in {1..5}; do
+          for attempt in {1..3}; do
             echo "Authentication attempt $attempt..."
-            
             if sudo tailscale up --authkey "$AUTH_KEY" 2>&1; then
               echo "✅ Tailscale authentication successful"
               break
-            else
-              echo "Attempt $attempt failed, waiting..."
-              sleep 5
             fi
+            sleep 3
           done
           
-          # Wait for connection to establish
-          echo "Waiting for Tailscale connection..."
-          sleep 10
+          # Wait for connection
+          sleep 5
 
-      - name: Get connection info
+      - name: Display Connection Info
         run: |
           echo "=== Connection Information ==="
           
-          # Get Tailscale status
-          echo "Tailscale Status:"
-          tailscale status 2>/dev/null || echo "Tailscale status command failed"
-          
           # Get Tailscale IP
-          echo ""
           echo "Tailscale IP:"
           tailscale ip 2>/dev/null || echo "Could not get Tailscale IP"
           
-          # Get local network info
           echo ""
-          echo "Local Network Info:"
-          ifconfig | grep "inet " | grep -v 127.0.0.1 | head -5 || ipconfig getifaddr en0 || true
+          echo "Tailscale Status:"
+          tailscale status 2>/dev/null || echo "Tailscale status command failed"
           
-          # Check VNC port
           echo ""
-          echo "VNC Service Status:"
+          echo "VNC Information:"
+          echo "  Password: yourpassword"
+          echo "  Port: 5900"
+          
+          # Check if VNC is listening
+          echo ""
+          echo "VNC Port Status:"
           sudo lsof -i :5900 2>/dev/null || echo "VNC not listening on port 5900"
-          echo "ARD/VNC should be accessible via: vnc://<ip>:5900"
-          
-          # Create connection info file
-          INFO_FILE="$HOME/connection_info.txt"
-          echo "Connection Information" > "$INFO_FILE"
-          echo "=====================" >> "$INFO_FILE"
-          echo "" >> "$INFO_FILE"
-          echo "VNC Access:" >> "$INFO_FILE"
-          echo "  Password: myvncpassword" >> "$INFO_FILE"
-          echo "  Port: 5900" >> "$INFO_FILE"
-          echo "" >> "$INFO_FILE"
-          
-          TAILSCALE_IP=$(tailscale ip 2>/dev/null || echo "Not available")
-          echo "Tailscale IP: $TAILSCALE_IP" >> "$INFO_FILE"
-          
-          # Get public IP for reference
-          PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "Not available")
-          echo "Public IP: $PUBLIC_IP" >> "$INFO_FILE"
-          
-          echo "Connection info saved to: $INFO_FILE"
 
-      - name: Install RustDesk
+      - name: Keep system running for 20 minutes
         run: |
-          echo "=== Installing RustDesk ==="
-          
-          # Download and install RustDesk
-          curl -L -o rustdesk.dmg "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
-          hdiutil attach rustdesk.dmg -mountpoint /Volumes/RustDesk -nobrowse
-          sudo cp -R "/Volumes/RustDesk/RustDesk.app" /Applications/
-          hdiutil detach /Volumes/RustDesk
-          rm -f rustdesk.dmg
-          
-          echo "✅ RustDesk installed"
-
-      - name: Start RustDesk
-        run: |
-          echo "=== Starting RustDesk ==="
-          
-          # Start RustDesk
-          open -a /Applications/RustDesk.app
-          sleep 10
-          
-          # Check if running
-          if pgrep -f "RustDesk" > /dev/null; then
-            echo "✅ RustDesk is running"
-          else
-            echo "⚠️ RustDesk may not have started properly"
-          fi
-
-      - name: Create screenshot directory
-        run: |
-          mkdir -p screenshots
-          echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
-
-      - name: Take initial screenshots
-        run: |
-          echo "=== Taking initial screenshots ==="
-          
-          # Take a few screenshots to verify everything works
-          for i in {1..3}; do
-            echo "Taking screenshot $i..."
-            screenshot_file="$SCREENSHOT_DIR/initial_$i.png"
-            screencapture -x "$screenshot_file" 2>/dev/null || true
-            sleep 2
-            
-            if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
-              size=$(ls -lh "$screenshot_file" | awk '{print $5}')
-              echo "  Screenshot $i: ${size}"
-            fi
-          done
-
-      - name: Upload connection info and screenshots
-        uses: actions/upload-artifact@v4
-        with:
-          name: remote-access-info
-          path: |
-            $HOME/connection_info.txt
-            ${{ env.SCREENSHOT_DIR }}
-          retention-days: 1
-
-      - name: Keep system running with periodic updates
-        run: |
-          echo "=== System is ready for remote access ==="
+          echo "=== System Setup Complete ==="
           echo ""
           echo "✅ VNC/ARD Enabled"
-          echo "   Password: myvncpassword"
+          echo "   Password: yourpassword"
           echo "   Port: 5900"
           echo ""
           echo "✅ Tailscale VPN Active"
-          echo "   Use 'tailscale ip' output to connect"
           echo ""
-          echo "✅ RustDesk Running"
-          echo "   ID should be displayed in RustDesk window"
-          echo ""
-          echo "=== Keeping system alive ==="
-          echo "This workflow will run for 6 hours (until timeout)"
-          echo "System is now accessible remotely"
-          echo ""
-          echo "Current time: $(date)"
-          echo "Will run until: $(date -v+6H)"
+          echo "=== Keeping system alive for 20 minutes ==="
+          echo "Start time: $(date)"
+          echo "Will run until: $(date -v+20M)"
           echo ""
           
-          # Display connection info periodically
-          counter=0
-          while true; do
-            counter=$((counter + 1))
-            minutes=$((counter * 5))
-            
+          # Display status every minute
+          for i in {1..20}; do
             echo ""
-            echo "=== Status Update (${minutes} minutes elapsed) ==="
+            echo "=== Minute $i/20 ==="
             echo "Time: $(date)"
             
-            # Check services
-            echo ""
-            echo "Service Status:"
+            # Show Tailscale status
+            if command -v tailscale &> /dev/null; then
+              echo "Tailscale IP: $(tailscale ip 2>/dev/null || echo 'Unknown')"
+            fi
             
-            # Check VNC
+            # Show VNC status
             if sudo lsof -i :5900 &>/dev/null; then
-              echo "  ✅ VNC: Listening on port 5900"
+              echo "VNC: ✅ Listening on port 5900"
             else
-              echo "  ❌ VNC: Not listening"
+              echo "VNC: ❌ Not listening"
             fi
             
-            # Check Tailscale
-            if tailscale status &>/dev/null; then
-              echo "  ✅ Tailscale: Connected"
-              TAILSCALE_IP=$(tailscale ip 2>/dev/null || echo "Unknown")
-              echo "      IP: $TAILSCALE_IP"
-            else
-              echo "  ❌ Tailscale: Not connected"
+            # Countdown
+            remaining=$((20 - i))
+            if [ $remaining -gt 0 ]; then
+              echo "Remaining: ${remaining} minutes"
+              sleep 60
             fi
-            
-            # Check RustDesk
-            if pgrep -f "RustDesk" &>/dev/null; then
-              echo "  ✅ RustDesk: Running"
-            else
-              echo "  ❌ RustDesk: Not running, restarting..."
-              open -a /Applications/RustDesk.app 2>/dev/null || true
-            fi
-            
-            # Take periodic screenshot
-            if [ $((counter % 12)) -eq 0 ]; then # Every hour
-              timestamp=$(date +%Y%m%d_%H%M%S)
-              periodic_file="$SCREENSHOT_DIR/periodic_${timestamp}.png"
-              screencapture -x "$periodic_file" 2>/dev/null || true
-              echo "  📸 Periodic screenshot saved"
-            fi
-            
-            # Sleep for 5 minutes
-            echo ""
-            echo "Next update in 5 minutes..."
-            sleep 300
           done
+          
+          echo ""
+          echo "✅ 20 minutes complete. Workflow ending."
 
       - name: Final cleanup
         if: always()
         run: |
           echo "=== Final Cleanup ==="
-          echo "Stopping services..."
-          
-          # Stop RustDesk
-          pkill -f "RustDesk" 2>/dev/null || true
           
           # Disconnect Tailscale
           sudo tailscale down 2>/dev/null || true
           
-          # Stop VNC/ARD
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -deactivate -configure -access -off 2>/dev/null || true
+          # Optional: Disable VNC/ARD if desired
+          # sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+          #   -deactivate -configure -access -off 2>/dev/null || true
           
           echo "✅ Cleanup complete"
