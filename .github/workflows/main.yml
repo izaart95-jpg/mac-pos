@@ -42,106 +42,251 @@ jobs:
           mkdir -p "$workDir"
           echo "WORK_DIR=$workDir" >> $GITHUB_ENV
 
-      - name: Grant screen recording permissions
+      - name: Prepare for screen recording
         run: |
-          # Grant permissions for screen recording (required on macOS)
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','com.apple.Terminal',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,1661481547);" || true
-          # For CI environment, we may need to accept permissions manually is not possible
-          echo "Note: Screen recording permissions may need manual approval on macOS"
+          # First, we need to enable assistive devices and accessibility API
+          echo "Enabling accessibility features..."
+          
+          # Enable assistive devices (this requires password, but we try anyway)
+          echo "a" | sudo accessibility_enable || true
+          
+          # Grant accessibility permissions to Terminal (or the runner)
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.Terminal',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
+          
+          # Also try for bash/zsh
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
+          
+          # Grant screen recording permissions to Terminal
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','com.apple.Terminal',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
+          
+          # Grant screen recording to bash
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
+          
+          # Grant screen recording to zsh
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/zsh',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
+          
+          # Kill TCC daemon to reload permissions
+          sudo pkill -9 TCC 2>/dev/null || true
+          sleep 2
 
-      - name: Start RustDesk
+      - name: Accept security prompt using AppleScript
         run: |
-          # Start RustDesk in the background
+          # This AppleScript will handle the security prompt
+          cat > /tmp/accept_prompt.applescript << 'EOF'
+          tell application "System Events"
+            # Wait for the security prompt to appear
+            repeat with i from 1 to 60
+              try
+                # Look for the "bash" security prompt
+                if exists (process "SecurityAgent") then
+                  # Look for the window with "bash" in the title
+                  repeat with w in windows of process "SecurityAgent"
+                    try
+                      if name of w contains "bash" or name of w contains "Screen Recording" then
+                        # Click the "Allow" button
+                        click button "Allow" of w
+                        log "Clicked Allow button"
+                        return true
+                      end if
+                    end try
+                  end repeat
+                  
+                  # Alternative: look for any dialog with allow button
+                  repeat with w in windows of process "SecurityAgent"
+                    try
+                      if exists (button "Allow" of w) then
+                        click button "Allow" of w
+                        log "Clicked Allow button on generic dialog"
+                        return true
+                      end if
+                    end try
+                  end repeat
+                end if
+              end try
+              delay 1
+            end repeat
+            return false
+          end tell
+          EOF
+          
+          # Run the AppleScript in the background
+          osascript /tmp/accept_prompt.applescript &
+
+      - name: Start RustDesk and handle prompt
+        run: |
+          # Start RustDesk and give it time to trigger the prompt
           open -a /Applications/RustDesk.app
-          echo "RustDesk started, waiting for initialization..."
-          sleep 15
+          echo "RustDesk started, waiting for security prompt..."
+          
+          # Wait for the prompt to appear and be handled
+          sleep 30
+          
+          # Check if RustDesk is running
+          if pgrep -f "RustDesk" > /dev/null; then
+            echo "RustDesk is running"
+          else
+            echo "RustDesk may have closed, trying to restart"
+            open -a /Applications/RustDesk.app
+            sleep 15
+          fi
 
-      - name: Take screenshots using screencapture
+      - name: Alternative approach using launchd service
+        if: always()
+        run: |
+          # Create a launch agent to auto-accept the prompt
+          cat > /tmp/com.rustdesk.allow.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.rustdesk.allow</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>osascript</string>
+                  <string>-e</string>
+                  <string>
+                  tell application "System Events"
+                    repeat
+                      try
+                        if exists (process "SecurityAgent") then
+                          tell process "SecurityAgent"
+                            if exists (button "Allow" of window 1) then
+                              click button "Allow" of window 1
+                              exit repeat
+                            end if
+                          end tell
+                        end if
+                      end try
+                      delay 0.5
+                    end repeat
+                  end tell
+                  </string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          
+          # Load the launch agent
+          sudo cp /tmp/com.rustdesk.allow.plist /Library/LaunchAgents/
+          sudo launchctl load /Library/LaunchAgents/com.rustdesk.allow.plist 2>/dev/null || true
+
+      - name: Take screenshots using different methods
         run: |
           cd "$WORK_DIR"
           
-          # Take 3 screenshots with different timings
-          for i in {1..3}; do
-            echo "Taking screenshot $i..."
-            screenshotPath="$WORK_DIR/screenshot_$i.png"
-            
-            # Using macOS built-in screencapture command
-            screencapture -x "$screenshotPath"
-            
-            echo "Screenshot saved to: $screenshotPath"
-            sleep 2
+          # Method 1: Try with screencapture
+          echo "Attempting screenshot with screencapture..."
+          screenshotPath="$WORK_DIR/screenshot_1.png"
+          
+          # Use a longer delay to ensure permissions are granted
+          sleep 10
+          
+          # Take screenshot - add retry logic
+          for attempt in {1..5}; do
+            echo "Attempt $attempt to capture screenshot..."
+            if screencapture -x "$screenshotPath" 2>/dev/null; then
+              if [ -f "$screenshotPath" ] && [ -s "$screenshotPath" ]; then
+                echo "Screenshot captured successfully on attempt $attempt"
+                ls -lh "$screenshotPath"
+                break
+              fi
+            fi
+            sleep 5
           done
 
-
-      - name: Use alternative screenshot methods
+      - name: Try Python-based screenshot
         if: always()
         run: |
           cd "$WORK_DIR"
           
-          # Method 2: Use sips to capture screen (another alternative)
-          echo "Trying alternative screenshot method..."
-          
-          # Create a temporary PDF screenshot
-          screencapture -t pdf "$WORK_DIR/screenshot_pdf.pdf"
-          
-          # Convert PDF to PNG using sips
-          if [ -f "$WORK_DIR/screenshot_pdf.pdf" ]; then
-            sips -s format png "$WORK_DIR/screenshot_pdf.pdf" --out "$WORK_DIR/screenshot_sips.png"
-            rm "$WORK_DIR/screenshot_pdf.pdf"
-          fi
-          
-          # Method 3: Use Python for more control
           python3 -c "
-          import subprocess
           import time
+          import subprocess
+          import os
+          import Quartz
+          import LaunchServices
+          from Foundation import NSURL
+          from AppKit import NSScreen, NSBitmapImageRep, NSJPEGFileType
           
-          # Take screenshot using macOS CLI
-          timestamp = int(time.time())
-          filename = f'$WORK_DIR/python_screenshot_{timestamp}.png'
-          subprocess.run(['screencapture', '-x', filename])
-          print(f'Screenshot saved: {filename}')
+          print('Attempting to take screenshot using Python...')
+          
+          # Method 1: Try using subprocess first
+          for i in range(3):
+              filename = f'$WORK_DIR/python_screenshot_{i}.png'
+              try:
+                  result = subprocess.run(['screencapture', '-x', filename], 
+                                         capture_output=True, timeout=10)
+                  if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                      print(f'Success with screencapture: {filename}')
+                      break
+              except Exception as e:
+                  print(f'Attempt {i} failed: {e}')
+                  time.sleep(2)
+          
+          # Method 2: Try using Quartz directly (macOS native API)
+          try:
+              # Get the main display
+              main_display = Quartz.CGMainDisplayID()
+              
+              # Create screenshot
+              image = Quartz.CGDisplayCreateImage(main_display)
+              if image:
+                  # Convert to NSImage and save
+                  width = Quartz.CGImageGetWidth(image)
+                  height = Quartz.CGImageGetHeight(image)
+                  
+                  # Create bitmap representation
+                  bitmap = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel_(
+                      None, width, height, 8, 4, True, False, 
+                      NSDeviceRGBColorSpace, 0, 0, 0
+                  )
+                  
+                  # Create context and draw
+                  context = bitmap.graphicsPort()
+                  Quartz.CGContextDrawImage(context, Quartz.CGRectMake(0, 0, width, height), image)
+                  
+                  # Save to file
+                  output_path = '$WORK_DIR/quartz_screenshot.png'
+                  bitmap_data = bitmap.representationUsingType_properties_(NSJPEGFileType, {})
+                  if bitmap_data:
+                      bitmap_data.writeToFile_atomically_(output_path, True)
+                      print(f'Screenshot saved via Quartz: {output_path}')
+          except Exception as e:
+              print(f'Quartz method failed: {e}')
           "
 
-      - name: Verify and list screenshots
+      - name: Verify screenshots were captured
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Looking for screenshots in: $WORK_DIR"
-          
-          # List all files in working directory
+          echo "Checking for screenshots in: $WORK_DIR"
           ls -la "$WORK_DIR"
           
-          # Count and list PNG files
-          screenshots=$(find "$WORK_DIR" -name "*.png" -type f 2>/dev/null || true)
-          screenshotCount=$(echo "$screenshots" | grep -c ".png" || echo "0")
-          
-          if [ "$screenshotCount" -eq 0 ]; then
-            echo "No PNG files found. Trying different locations..."
-            
-            # Check common locations
-            find /tmp -name "*.png" -type f 2>/dev/null | head -5
-            find "$HOME/Desktop" -name "*.png" -type f 2>/dev/null | head -5
-          else
-            echo "Found $screenshotCount screenshot(s):"
-            echo "$screenshots" | while read -r file; do
-              if [ -n "$file" ]; then
-                echo "  - $file"
-                # Get file size
-                if [ -f "$file" ]; then
-                  size=$(ls -lh "$file" | awk '{print $5}')
-                  echo "    Size: $size"
-                fi
-              fi
-            done
-          fi
-
-      - name: Cleanup before upload
-        run: |
-          # Remove any corrupted/empty screenshot files
-          find "$WORK_DIR" -name "*.png" -type f -size 0 -delete 2>/dev/null || true
+          # Check file sizes
+          for file in "$WORK_DIR"/*.png "$WORK_DIR"/*.jpg; do
+            if [ -f "$file" ]; then
+              size=$(ls -lh "$file" | awk '{print $5}')
+              echo "Found: $file (Size: $size)"
+            fi
+          done
           
           # Count valid screenshots
-          validScreenshots=$(find "$WORK_DIR" -name "*.png" -type f -size +1k 2>/dev/null | wc -l)
-          echo "Valid screenshots to upload: $validScreenshots"
+          valid_count=$(find "$WORK_DIR" -name "*.png" -type f -size +1k 2>/dev/null | wc -l)
+          echo "Valid screenshots: $valid_count"
+          
+          if [ "$valid_count" -eq 0 ]; then
+            echo "Warning: No screenshots captured. This is likely due to:"
+            echo "1. macOS security restrictions (Screen Recording permission)"
+            echo "2. The security prompt was not auto-accepted"
+            echo "3. No active display in CI environment"
+            
+            # Create a dummy file to show workflow ran
+            echo "Screenshot capture failed due to macOS permissions" > "$WORK_DIR/error.txt"
+            echo "In CI environments, screen recording typically requires:" >> "$WORK_DIR/error.txt"
+            echo "1. Physical user interaction to accept the prompt" >> "$WORK_DIR/error.txt"
+            echo "2. A logged-in user session with a display" >> "$WORK_DIR/error.txt"
+          fi
 
       - name: Upload screenshots as artifacts
         uses: actions/upload-artifact@v4
@@ -149,49 +294,24 @@ jobs:
           name: rustdesk-screenshots-macos
           path: |
             ${{ env.WORK_DIR }}/*.png
+            ${{ env.WORK_DIR }}/*.jpg
+            ${{ env.WORK_DIR }}/error.txt
           retention-days: 1
 
-      - name: Keep workflow running
-        run: |
-          echo "=== RustDesk Screenshot Workflow (macOS) ==="
-          echo "RustDesk is running in the background"
-          echo "Workflow will run for up to 24 hours"
-          echo "============================================"
-          
-          # Keep the workflow alive
-          startTime=$(date +%s)
-          while true; do
-            currentTime=$(date +%s)
-            elapsedHours=$(( (currentTime - startTime) / 3600 ))
-            
-            if [ $elapsedHours -ge 24 ]; then
-              echo "24-hour limit reached, workflow completed"
-              break
-            fi
-            
-            echo "[$(date)] RustDesk still running... (Elapsed: ${elapsedHours}h)"
-            echo "Next check in 5 minutes..."
-            
-            # Check if RustDesk is still running
-            if pgrep -f "RustDesk" > /dev/null; then
-              echo "RustDesk process is active"
-            else
-              echo "RustDesk process not found, it may have closed"
-            fi
-            
-            # Wait 5 minutes
-            sleep 300
-          done
-
-      - name: Cleanup (always run)
+      - name: Cleanup
         if: always()
         run: |
           echo "Cleaning up..."
           
-          # Quit RustDesk if still running
-          pkill -f "RustDesk" 2>/dev/null || true
+          # Remove launch agent
+          sudo launchctl unload /Library/LaunchAgents/com.rustdesk.allow.plist 2>/dev/null || true
+          sudo rm -f /Library/LaunchAgents/com.rustdesk.allow.plist 2>/dev/null || true
           
-          # Remove temporary files
+          # Quit RustDesk
+          pkill -f "RustDesk" 2>/dev/null || true
+          pkill -f "rustdesk" 2>/dev/null || true
+          
+          # Remove DMG
           rm -f "$HOME/Downloads/rustdesk.dmg" 2>/dev/null || true
           
           echo "Cleanup complete"
