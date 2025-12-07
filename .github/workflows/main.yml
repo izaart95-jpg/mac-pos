@@ -6,55 +6,115 @@ on:
 jobs:
   rustdesk-screenshot:
     runs-on: macos-latest
-    timeout-minutes: 10  # Should complete in a few minutes
+    timeout-minutes: 360  # Keep running for 6 hours
 
     steps:
-      - name: Download and install RustDesk
+      - name: Download RustDesk
         run: |
-          curl -L -o rustdesk.dmg "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
-          hdiutil attach rustdesk.dmg -mountpoint /Volumes/RustDesk -nobrowse
+          rustdeskUrl="https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
+          rustdeskPath="$HOME/Downloads/rustdesk.dmg"
+          curl -L -o "$rustdeskPath" "$rustdeskUrl"
+          echo "RUSTDESK_DMG=$rustdeskPath" >> $GITHUB_ENV
+
+      - name: Mount DMG and install RustDesk
+        run: |
+          hdiutil attach "$RUSTDESK_DMG" -mountpoint /Volumes/RustDesk -nobrowse
           sudo cp -R "/Volumes/RustDesk/RustDesk.app" /Applications/
           hdiutil detach /Volumes/RustDesk
 
-      - name: Create screenshot directory
+      - name: Create working directory
         run: |
-          mkdir -p screenshots
-          echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
+          workDir="$GITHUB_WORKSPACE/screenshots"
+          mkdir -p "$workDir"
+          echo "WORK_DIR=$workDir" >> $GITHUB_ENV
 
-      - name: Set permissions for screen recording
+      - name: Set screen recording permissions
         run: |
-          # Grant permissions to bash for screen recording
           sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
             "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,strftime('%s','now'));" 2>/dev/null || true
           sudo pkill -9 TCC 2>/dev/null || true
           sleep 2
 
-      - name: Start RustDesk and take screenshot
+      - name: Start RustDesk
         run: |
-          # Start RustDesk
           open -a /Applications/RustDesk.app
-          sleep 5
-          
-          # Take screenshot
-          screenshot_file="$SCREENSHOT_DIR/rustdesk_screenshot.png"
-          screencapture -x "$screenshot_file"
-          
-          if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
-            echo "✅ Screenshot captured: $screenshot_file"
-            ls -lh "$screenshot_file"
-          else
-            echo "❌ Failed to capture screenshot"
-          fi
+          sleep 10
 
-      - name: Upload screenshot artifact
+      - name: Take initial screenshot
+        run: |
+          cd "$WORK_DIR"
+          screencapture -x "$WORK_DIR/rustdesk_initial.png"
+          ls -lh "$WORK_DIR"/*.png 2>/dev/null || echo "No screenshots yet"
+
+      - name: Upload initial screenshot
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-screenshot
-          path: ${{ env.SCREENSHOT_DIR }}/*.png
+          name: rustdesk-initial-screenshot
+          path: ${{ env.WORK_DIR }}/*.png
           retention-days: 1
 
-      - name: Cleanup
+      - name: Keep workflow running and take periodic screenshots
+        run: |
+          echo "=== RustDesk Screenshot Monitor ==="
+          echo "Workflow will run for up to 6 hours"
+          echo "Taking periodic screenshots..."
+          echo "==================================="
+          
+          start_time=$(date +%s)
+          end_time=$((start_time + 3600))  # 1 hour from now (adjust as needed)
+          screenshot_count=0
+          
+          while [ $(date +%s) -lt $end_time ]; do
+            current_time=$(date +%s)
+            elapsed_minutes=$(( (current_time - start_time) / 60 ))
+            
+            # Take a screenshot
+            screenshot_count=$((screenshot_count + 1))
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            screenshot_file="$WORK_DIR/rustdesk_${timestamp}_${screenshot_count}.png"
+            
+            echo "[$(date '+%H:%M:%S')] Taking screenshot #${screenshot_count} (Elapsed: ${elapsed_minutes}m)..."
+            
+            if screencapture -x "$screenshot_file" 2>/dev/null; then
+              if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+                size=$(ls -lh "$screenshot_file" | awk '{print $5}')
+                echo "  ✓ Saved: $(basename "$screenshot_file") (${size})"
+              else
+                echo "  ✗ Failed to save screenshot"
+              fi
+            else
+              echo "  ✗ Failed to capture screenshot"
+            fi
+            
+            # Check if RustDesk is still running
+            if pgrep -f "RustDesk" > /dev/null; then
+              echo "  RustDesk process is active"
+            else
+              echo "  RustDesk process not found, restarting..."
+              open -a /Applications/RustDesk.app
+              sleep 10
+            fi
+            
+            # Wait before next screenshot (e.g., 5 minutes)
+            echo "  Next screenshot in 5 minutes..."
+            sleep 300  # 5 minutes
+            
+            # Every 30 minutes, upload accumulated screenshots
+            if [ $((screenshot_count % 6)) -eq 0 ]; then
+              echo "=== Uploading batch of screenshots ==="
+              # You could add another upload-artifact step here if needed
+            fi
+          done
+          
+          echo "==================================="
+          echo "Monitoring completed after ${elapsed_minutes} minutes"
+          echo "Total screenshots taken: ${screenshot_count}"
+          echo "==================================="
+
+      - name: Final cleanup
         if: always()
         run: |
+          echo "Final cleanup..."
           pkill -f "RustDesk" 2>/dev/null || true
-          rm -f rustdesk.dmg 2>/dev/null || true
+          rm -f "$HOME/Downloads/rustdesk.dmg" 2>/dev/null || true
+          echo "All done!"
