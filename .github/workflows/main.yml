@@ -6,230 +6,55 @@ on:
 jobs:
   rustdesk-screenshot:
     runs-on: macos-latest
-    timeout-minutes: 30  # Reduced timeout since we don't need 24 hours
+    timeout-minutes: 10  # Should complete in a few minutes
 
     steps:
-      - name: Download RustDesk
+      - name: Download and install RustDesk
         run: |
-          rustdeskUrl="https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
-          rustdeskPath="$HOME/Downloads/rustdesk.dmg"
-          curl -L -o "$rustdeskPath" "$rustdeskUrl"
-          echo "RUSTDESK_DMG=$rustdeskPath" >> $GITHUB_ENV
-          echo "RUSTDESK_APP=/Applications/RustDesk.app" >> $GITHUB_ENV
-
-      - name: Mount DMG and install RustDesk
-        run: |
-          # Mount the DMG
-          hdiutil attach "$RUSTDESK_DMG" -mountpoint /Volumes/RustDesk -nobrowse
-          
-          # Copy RustDesk to Applications
+          curl -L -o rustdesk.dmg "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.dmg"
+          hdiutil attach rustdesk.dmg -mountpoint /Volumes/RustDesk -nobrowse
           sudo cp -R "/Volumes/RustDesk/RustDesk.app" /Applications/
-          
-          # Unmount the DMG
           hdiutil detach /Volumes/RustDesk
-          
-          # Verify installation
-          if [ -d "/Applications/RustDesk.app" ]; then
-            echo "RustDesk installed successfully"
-          else
-            echo "Failed to install RustDesk"
-            exit 1
-          fi
 
-      - name: Create working directory
+      - name: Create screenshot directory
         run: |
-          workDir="$GITHUB_WORKSPACE/screenshots"
-          mkdir -p "$workDir"
-          echo "WORK_DIR=$workDir" >> $GITHUB_ENV
+          mkdir -p screenshots
+          echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
 
-      - name: Prepare for screen recording
+      - name: Set permissions for screen recording
         run: |
-          # First, we need to enable assistive devices and accessibility API
-          echo "Enabling accessibility features..."
-          
-          # Grant accessibility permissions to Terminal (or the runner)
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.Terminal',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
-          
-          # Also try for bash/zsh
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
-          
-          # Grant screen recording permissions to Terminal
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','com.apple.Terminal',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
-          
-          # Grant screen recording to bash
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
-          
-          # Grant screen recording to zsh
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/zsh',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || true
-          
-          # Kill TCC daemon to reload permissions
+          # Grant permissions to bash for screen recording
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+            "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','/bin/bash',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,strftime('%s','now'));" 2>/dev/null || true
           sudo pkill -9 TCC 2>/dev/null || true
           sleep 2
 
-      - name: Start RustDesk and handle prompt
+      - name: Start RustDesk and take screenshot
         run: |
-          # Start RustDesk and give it time to trigger the prompt
+          # Start RustDesk
           open -a /Applications/RustDesk.app
-          echo "RustDesk started, waiting for security prompt..."
-          
-          # Wait a bit for the app to start
-          sleep 10
-          
-          # Check if RustDesk is running
-          if pgrep -f "RustDesk" > /dev/null; then
-            echo "RustDesk is running"
-          else
-            echo "RustDesk may have closed, trying to restart"
-            open -a /Applications/RustDesk.app
-            sleep 10
-          fi
-
-      - name: Take multiple screenshots with retry
-        run: |
-          cd "$WORK_DIR"
-          
-          # Take 3 screenshots with delays
-          for i in {1..3}; do
-            echo "Taking screenshot $i..."
-            screenshotPath="$WORK_DIR/rustdesk_screenshot_$i.png"
-            
-            # Try multiple times for each screenshot
-            for attempt in {1..3}; do
-              echo "  Attempt $attempt..."
-              if screencapture -x "$screenshotPath" 2>/dev/null; then
-                if [ -f "$screenshotPath" ] && [ -s "$screenshotPath" ]; then
-                  size=$(ls -lh "$screenshotPath" | awk '{print $5}')
-                  echo "  ✓ Screenshot $i captured successfully (Size: $size)"
-                  break
-                fi
-              fi
-              sleep 2
-            done
-            
-            # Wait between screenshots
-            sleep 3
-          done
-          
-          # List all screenshots
-          echo "All screenshots:"
-          ls -lh "$WORK_DIR"/*.png 2>/dev/null || echo "No PNG files found"
-
-      - name: Take additional screenshots with timestamp
-        run: |
-          cd "$WORK_DIR"
-          
-          # Take screenshots with timestamp in filename
-          timestamp=$(date +%Y%m%d_%H%M%S)
-          
-          # Regular screenshot
-          screencapture -x "$WORK_DIR/rustdesk_${timestamp}.png" 2>/dev/null || true
-          
-          # Wait and take another
           sleep 5
-          timestamp2=$(date +%Y%m%d_%H%M%S)
-          screencapture -x "$WORK_DIR/rustdesk_${timestamp2}.png" 2>/dev/null || true
           
-          echo "Timestamped screenshots:"
-          ls -lh "$WORK_DIR"/*${timestamp}*.png 2>/dev/null || echo "No timestamped screenshots"
-
-      - name: Verify and analyze screenshots
-        run: |
-          echo "=== Screenshot Analysis ==="
-          echo "Directory: $WORK_DIR"
-          echo ""
+          # Take screenshot
+          screenshot_file="$SCREENSHOT_DIR/rustdesk_screenshot.png"
+          screencapture -x "$screenshot_file"
           
-          # Count and list all screenshots
-          total_files=$(find "$WORK_DIR" -name "*.png" -type f 2>/dev/null | wc -l)
-          echo "Total PNG files: $total_files"
-          
-          if [ "$total_files" -eq 0 ]; then
-            echo "No screenshots were captured"
-            echo "Creating debug info..."
-            echo "Current processes:" > "$WORK_DIR/debug.txt"
-            ps aux | grep -i rustdesk >> "$WORK_DIR/debug.txt" || true
-            echo "" >> "$WORK_DIR/debug.txt"
-            echo "Screen recording permissions:" >> "$WORK_DIR/debug.txt"
-            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "SELECT * FROM access WHERE service='kTCCServiceScreenRecording';" 2>/dev/null >> "$WORK_DIR/debug.txt" || true
+          if [ -f "$screenshot_file" ] && [ -s "$screenshot_file" ]; then
+            echo "✅ Screenshot captured: $screenshot_file"
+            ls -lh "$screenshot_file"
           else
-            echo "Screenshots found:"
-            echo ""
-            
-            for file in "$WORK_DIR"/*.png; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                size=$(ls -lh "$file" | awk '{print $5}')
-                dimensions=$(file "$file" 2>/dev/null | grep -o "[0-9]* x [0-9]*" || echo "Unknown")
-                echo "  📸 $filename"
-                echo "     Size: $size"
-                echo "     Dimensions: $dimensions"
-                echo ""
-                
-                # Check if file is valid (not empty/corrupted)
-                if ! pngcheck "$file" 2>/dev/null; then
-                  if command -v pngcheck >/dev/null 2>&1; then
-                    echo "     ⚠️  File may be corrupted"
-                  fi
-                fi
-              fi
-            done
-            
-            # Get total size
-            total_size=$(du -sh "$WORK_DIR" | awk '{print $1}')
-            echo "Total directory size: $total_size"
+            echo "❌ Failed to capture screenshot"
           fi
 
-      - name: Upload screenshots as artifacts
+      - name: Upload screenshot artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-screenshots
-          path: |
-            ${{ env.WORK_DIR }}/
-          retention-days: 7
-          if-no-files-found: warn
+          name: rustdesk-screenshot
+          path: ${{ env.SCREENSHOT_DIR }}/*.png
+          retention-days: 1
 
       - name: Cleanup
         if: always()
         run: |
-          echo "Cleaning up..."
-          
-          # Quit RustDesk
           pkill -f "RustDesk" 2>/dev/null || true
-          pkill -f "rustdesk" 2>/dev/null || true
-          
-          # Remove DMG
-          rm -f "$HOME/Downloads/rustdesk.dmg" 2>/dev/null || true
-          
-          # Remove any leftover AppleScript processes
-          pkill -f "System Events" 2>/dev/null || true
-          
-          echo "✅ Cleanup complete"
-
-      - name: Workflow Summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "          WORKFLOW SUMMARY"
-          echo "=========================================="
-          echo "📱 App: RustDesk"
-          echo "🖥️  OS: macOS"
-          echo "📁 Output: $WORK_DIR"
-          echo ""
-          
-          # Count successful screenshots
-          screenshots=$(find "$WORK_DIR" -name "*.png" -type f -size +1k 2>/dev/null | wc -l)
-          
-          if [ "$screenshots" -gt 0 ]; then
-            echo "✅ SUCCESS: Captured $screenshots screenshot(s)"
-            echo ""
-            echo "Download the 'rustdesk-screenshots' artifact to view them."
-          else
-            echo "⚠️  WARNING: No screenshots were captured"
-            echo ""
-            echo "Possible reasons:"
-            echo "1. Screen recording permissions not granted"
-            echo "2. RustDesk didn't start properly"
-            echo "3. No display available in CI environment"
-            echo ""
-            echo "Check the debug.txt file in artifacts for more info."
-          fi
-          echo "=========================================="
+          rm -f rustdesk.dmg 2>/dev/null || true
