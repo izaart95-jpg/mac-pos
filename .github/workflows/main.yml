@@ -17,10 +17,14 @@ jobs:
           echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
           echo "SSHX_SESSION_FILE=$(pwd)/sshx_session.txt" >> $GITHUB_ENV
           screencapture 2.png
+          cliclick c:480,368
           sleep 1
+          cliclick c:480,368
           brew install tailscale
+          cliclick c:480,368
+          cliclick c:480,368
           screencapture 1.png
-          cliclick dc:462,374
+          cliclick c:462,374
           sudo tailscaled &
           screencapture 5.png
           sudo tailscale up --authkey=tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf
