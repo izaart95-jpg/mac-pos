@@ -147,27 +147,11 @@ jobs:
           echo "Taking post-startup screenshot..."
           screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
           sudo screencapture -x "$screenshot_file" 2>/dev/null || true
-          sleep 20 
-          cliclick dc:462,374
-          cliclick c:600,540
-          cliclick c:600,540
-          cliclick c:546,508
-          cliclick c:403,361
-          cliclick c:436,400
-          cliclick c:462,428
-          cliclick c:490,455
-          cliclick c:520,478
-          sudo sysadminctl -addUser Hamiya -fullName "Hamiyas" -password Hamza@157
+           sudo sysadminctl -addUser Hamiya -fullName "Hamiyas" -password Hamza@157
           sudo dseditgroup -o edit -a Hamiya -t user admin
           sudo -u Hamiya open -a "System Settings"
-          screencapture settings.png
-          cliclick dc:861,583
-          cliclick c:861,583
-          cliclick c:438,438
-          cliclick c:793,266
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement DisableRemoteManagement -bool false
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users Hamiya -privs -all -restart -agent -menu
-          echo "HEREEEEEEEEEEEEE"
+          sudo -u Hamiya open -a "System Settings"
+          screencapture ocr1.png
 
  
 
