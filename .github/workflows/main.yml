@@ -24,6 +24,7 @@ jobs:
           cliclick c:480,368
           cliclick c:480,368
           screencapture 1.png
+          cliclick c:480,368
           cliclick c:462,374
           sudo tailscaled &
           screencapture 5.png
@@ -33,6 +34,7 @@ jobs:
       - name: Take initial screenshot
         run: |
           echo "=== Taking initial screenshot ==="
+          cliclick c:480,368
           screenshot_file="$SCREENSHOT_DIR/initial_$(date +%s).png"
           sudo screencapture -x "$screenshot_file" 2>/dev/null || true
           
@@ -48,12 +50,14 @@ jobs:
           echo "=== Installing sshx ==="
           curl -sSf https://sshx.io/get | sh
           echo "✅ sshx installed"
+          cliclick c:480,368
 
       - name: Run sshx in background
         run: |
           echo "=== Starting sshx session ==="
           
           # Run sshx in background and capture output
+          cliclick c:480,368
           sshx 2>&1 | tee "$SSHX_SESSION_FILE" &
           SSHX_PID=$!
           echo "SSHX_PID=$SSHX_PID" >> $GITHUB_ENV
@@ -70,6 +74,7 @@ jobs:
           
           # Show session info
           echo ""
+          cliclick c:480,368
           echo "=== SSHX Session Info ==="
           if [ -f "$SSHX_SESSION_FILE" ]; then
             cat "$SSHX_SESSION_FILE" | grep -i -A2 -B2 "connect\|join\|session\|http\|link\|url" || true
