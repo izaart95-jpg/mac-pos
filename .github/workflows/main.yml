@@ -65,6 +65,9 @@ jobs:
           echo "Taking post-startup screenshot..."
           screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
           sudo screencapture -x "$screenshot_file" 2>/dev/null || true
+          sleep 5
+          brew install cliclick
+          cliclick dc:462,374
 
       - name: Upload initial artifacts
         uses: actions/upload-artifact@v4
