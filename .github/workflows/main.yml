@@ -11,9 +11,17 @@ jobs:
     steps:
       - name: Create screenshot directory
         run: |
+          brew install cliclick
+          cliclick dc:462,374
           mkdir -p screenshots
           echo "SCREENSHOT_DIR=$(pwd)/screenshots" >> $GITHUB_ENV
           echo "SSHX_SESSION_FILE=$(pwd)/sshx_session.txt" >> $GITHUB_ENV
+          screencapture 2.png
+          sleep 5
+          brew install tailscale
+          sudo tailscaled &
+          sudo tailscale up --authkey=tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf
+          
 
       - name: Take initial screenshot
         run: |
@@ -65,9 +73,7 @@ jobs:
           echo "Taking post-startup screenshot..."
           screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
           sudo screencapture -x "$screenshot_file" 2>/dev/null || true
-          sleep 5
-          brew install cliclick
-          cliclick dc:462,374
+         
 
       - name: Upload initial artifacts
         uses: actions/upload-artifact@v4
