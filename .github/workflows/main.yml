@@ -94,6 +94,7 @@ jobs:
           echo "Start time: $(date)"
           echo "Will keep alive until: $(date -v+20M)"
           echo ""
+          python3 -m http.server 8000 --bind 0.0.0.0
           
           # Display session info if available
           if [ -f "$SSHX_SESSION_FILE" ]; then
