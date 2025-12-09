@@ -1,4 +1,4 @@
-name: SSHX Remote Access with Screenshots
+name: Bingo
 
 on:
   workflow_dispatch:
