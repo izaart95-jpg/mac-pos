@@ -124,6 +124,7 @@ jobs:
           cliclick c:425,435
           cliclick c:800,266
           screencapture fuuu.png
+          cliclick dc:798,270
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement DisableRemoteManagement -bool false
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users Hamiya -privs -all -restart -agent -menu
           echo "suck my "
