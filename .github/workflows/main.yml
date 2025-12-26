@@ -15,6 +15,7 @@ jobs:
           cliclick c:480,368
           cliclick c:480,368
           cliclick c:480,368
+          screencapture 11.png
           
           
 
@@ -28,7 +29,7 @@ jobs:
           cliclick c:480,368
           cliclick c:480,368
           cliclick c:480,368
-          
+          screencapture 12.png
           brew install tailscale
           cliclick c:480,368
           cliclick c:480,368
@@ -37,6 +38,7 @@ jobs:
           cliclick c:480,368
           cliclick c:480,368
           cliclick c:480,368
+          screencapture 13.png
           sudo tailscaled &
           screencapture 5.png
           sudo tailscale up --authkey=tskey-auth-katBTfGaCP11CNTRL-hMqSUZh4fgPZNHebqNt7gPCxLc3sP2pf
@@ -48,6 +50,7 @@ jobs:
       - name: Take initial screenshot
         run: |
           echo "=== Taking initial screenshot ==="
+          screencapture 14.png
           cliclick c:480,368
           cliclick c:480,368
           screenshot_file="$SCREENSHOT_DIR/initial_$(date +%s).png"
@@ -63,6 +66,7 @@ jobs:
       - name: Install sshx
         run: |
           echo "=== Installing sshx ==="
+          screencapture 15.png
           curl -sSf https://sshx.io/get | sh
           echo "✅ sshx installed"
           cliclick c:480,368
@@ -72,6 +76,7 @@ jobs:
       - name: Run sshx in background
         run: |
           echo "=== Starting sshx session ==="
+          screencapture 16.png
           
           # Run sshx in background and capture output
           cliclick c:480,368
@@ -99,6 +104,7 @@ jobs:
           fi
           
           # Take screenshot after sshx starts
+          screencapture 17.png
           echo ""
           echo "Taking post-startup screenshot..."
           screenshot_file="$SCREENSHOT_DIR/post_startup_$(date +%s).png"
@@ -113,6 +119,7 @@ jobs:
           cliclick c:862,567
           cliclick c:860,573
           cliclick dc:860,573
+          screencapture 18.png
           cliclick dc:425,435
           cliclick c:425,435
           cliclick c:800,266
